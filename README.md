@@ -1,215 +1,348 @@
-# 证书批量生成器（离线版）使用与维护手册
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Offline Batch Certificate Generator</title>
+    <!-- Include Libraries via CDN for parsing and generation -->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        :root {
+            --primary: #4f46e5;
+            --primary-hover: #4338ca;
+            --bg-color: #f3f4f6;
+            --card-bg: #ffffff;
+            --text-main: #1f2937;
+            --border-color: #e5e7eb;
+        }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif; }
+        body { background-color: var(--bg-color); color: var(--text-main); display: flex; height: 100vh; overflow: hidden; }
+        
+        /* Sidebar Control Panel */
+        sidebar { width: 420px; background: var(--card-bg); border-right: 1px solid var(--border-color); display: flex; flex-direction: column; height: 100%; box-shadow: 4px 0 15px rgba(0,0,0,0.05); z-index: 10; }
+        .sidebar-header { padding: 20px; border-bottom: 1px solid var(--border-color); background: #fafafa; }
+        .sidebar-header h2 { font-size: 1.25rem; color: var(--primary); margin-bottom: 4px; }
+        .sidebar-header p { font-size: 0.85rem; color: #6b7280; }
+        
+        .sidebar-content { padding: 20px; overflow-y: auto; flex: 1; display: flex; flex-direction: column; gap: 20px; }
+        .section-box { background: #f9fafb; border: 1px solid var(--border-color); border-radius: 8px; padding: 15px; }
+        .section-box h3 { font-size: 0.95rem; margin-bottom: 10px; color: #374151; display: flex; justify-content: space-between; align-items: center; }
+        
+        label { display: block; font-size: 0.8rem; font-weight: 600; margin-bottom: 5px; color: #4b5563; }
+        input[type="file"], input[type="text"], select { width: 100%; padding: 8px 10px; border: 1px solid var(--border-color); border-radius: 6px; font-size: 0.85rem; margin-bottom: 12px; background: #fff; }
+        
+        .btn { background: var(--primary); color: white; border: none; padding: 10px 16px; border-radius: 6px; font-size: 0.9rem; font-weight: 600; cursor: pointer; width: 100%; transition: background 0.2s; text-align: center; }
+        .btn:hover { background: var(--primary-hover); }
+        .btn-secondary { background: #e5e7eb; color: #374151; margin-top: 6px; }
+        .btn-secondary:hover { background: #d1d5db; }
 
-适用文件：certificate-generator-offline.html ｜ 更新日期：2026 年 10 月 29 日
+        /* Main Workspace Preview */
+        main { flex: 1; display: flex; flex-direction: column; height: 100%; background: #eef2f7; position: relative; overflow: hidden; }
+        .toolbar { padding: 15px 25px; background: white; border-bottom: 1px solid var(--border-color); display: flex; justify-content: space-between; align-items: center; }
+        .preview-container { flex: 1; display: flex; justify-content: center; align-items: center; padding: 30px; overflow: auto; position: relative; }
+        
+        .canvas-wrapper { position: relative; box-shadow: 0 10px 25px rgba(0,0,0,0.15); background: white; transform-origin: center center; }
+        canvas { display: block; max-width: 100%; height: auto; }
+        
+        /* Draggable Interactive Overlay Text Elements */
+        .draggable-text { position: absolute; cursor: move; border: 1px dashed transparent; user-select: none; padding: 2px 4px; }
+        .draggable-text.selected { border-color: var(--primary); background: rgba(79, 70, 229, 0.1); }
 
-## 1. 这是什么
+        .status-bar { font-size: 0.8rem; color: #6b7280; margin-top: 8px; text-align: center; }
+    </style>
+</head>
+<body>
 
-证书批量生成器是一个单一的 HTML 文件（约 3.2 MB）。用浏览器打开后，可以载入证书底图，在预览上调整姓名等文字的位置和样式，上传 Excel 或 CSV 名单后，批量生成每位参与者的证书 PDF，并统一打包成 ZIP 下载。
+    <!-- Sidebar Controls -->
+    <sidebar>
+        <div class="sidebar-header">
+            <h2>Certificate Generator</h2>
+            <p>Offline Batch Tool (Single-File Edition)</p>
+        </div>
+        <div class="sidebar-content">
+            <!-- 1. Background Template -->
+            <div class="section-box">
+                <h3>1. Template Background</h3>
+                <label>Upload Image (PNG / JPG)</label>
+                <input type="file" id="bgUpload" accept="image/png, image/jpeg, image/webp">
+                <button class="btn btn-secondary" id="resetDefaultTpl">Restore Default Template</button>
+            </div>
 
-它的核心特点：
+            <!-- 2. Data List -->
+            <div class="section-box">
+                <h3>2. Participant List</h3>
+                <label>Upload Excel (.xlsx/.xls) or CSV</label>
+                <input type="file" id="listUpload" accept=".xlsx, .xls, .csv">
+                <div class="status-bar" id="listStatus">No list loaded. Default sample active.</div>
+            </div>
 
-- 不需要安装
-- 不需要网络
-- 不需要服务器
-- 名单和证书只在你的浏览器里处理，不会上传到任何地方
-- 不包含：寄送 Email、云端存储、多人协作、账号权限
+            <!-- 3. Field Configurator -->
+            <div class="section-box">
+                <h3>3. Active Text Element</h3>
+                <label>Selected Text Field</label>
+                <select id="fieldSelect">
+                    <option value="name">NAMA (Participant Name)</option>
+                    <option value="course">COURSE / TITLE</option>
+                    <option value="date">DATE</option>
+                </select>
+                
+                <label>Map Data Column</label>
+                <select id="dataMapping"></select>
 
-## 2. 快速开始
+                <label>Font Size (<span id="fontSizeVal">24</span>px)</label>
+                <input type="range" id="fontSizeRange" min="10" max="80" value="24" style="width:100%">
 
-1. 用 Chrome 或 Edge 双击打开文件。
-2. 模板：直接用预设的森林模板，或在「1. 模板底图」上传自己的底图。
-3. 名单：在「2. 名单」上传 Excel 或 CSV，系统会先自动对应栏位。
-4. 在「3. 文字栏位」确认每个文字对应的栏位，并在右侧预览里拖动文字到正确位置。
-5. 点「生成并下载 ZIP」，解压后在 pdf 文件夹里得到每个人的证书。
+                <label>Text Color</label>
+                <input type="color" id="fontColor" value="#1f2937" style="height:36px; padding:2px;">
+            </div>
 
-建议先用 2 到 3 笔测试资料确认版面，再放入完整名单。
+            <!-- 4. Generation -->
+            <div>
+                <button class="btn" id="generateBtn">Generate & Download ZIP</button>
+            </div>
+        </div>
+    </sidebar>
 
-## 3. 详细使用说明
+    <!-- Visual Workspace -->
+    <main>
+        <div class="toolbar">
+            <span><strong>Preview Mode:</strong> Click and drag texts on the canvas or use sidebar settings.</span>
+            <span id="previewRecordInfo">Showing record: 1 / 1 (Sample Data)</span>
+        </div>
+        <div class="preview-container">
+            <div class="canvas-wrapper" id="canvasWrapper">
+                <canvas id="certCanvas" width="842" height="595"></canvas>
+                <div id="overlayContainer"></div>
+            </div>
+        </div>
+    </main>
 
-### 3.1 模板底图
+    <script>
+        // Core application state
+        let state = {
+            bgImage: null,
+            listData: [{ name: "SAMPLE PARTICIPANT", course: "Advanced Frontend Architecture", date: "29 October 2026" }],
+            headers: ["name", "course", "date"],
+            currentRecordIndex: 0,
+            selectedField: "name",
+            fields: {
+                name: { text: "SAMPLE PARTICIPANT", x: 50, y: 45, size: 32, color: "#111827", mapping: "name" },
+                course: { text: "Advanced Frontend Architecture", x: 50, y: 60, size: 20, color: "#4b5563", mapping: "course" },
+                date: { text: "29 October 2026", x: 20, y: 80, size: 14, color: "#6b7280", mapping: "date" }
+            }
+        };
 
-| 格式 | 说明 |
-| --- | --- |
-| PNG、JPG、WebP | 直接使用 |
-| PDF | 只读取第 1 页，转成长边约 2400 像素的图片；多页 PDF 会提示只用第 1 页 |
-| PowerPoint、Keynote | 不能直接上传。请先在 PowerPoint 选「文件 → 导出 → PDF」或另存为 PNG；Google Slides 用「下载 → PDF」 |
+        const canvas = document.getElementById('certCanvas');
+        const ctx = canvas.getContext('2d');
 
-要点：
+        // Initialize Default Gradient Template Background
+        function createDefaultTemplate() {
+            const tempC = document.createElement('canvas');
+            tempC.width = 1123; tempC.height = 794; // A4 Landscape ratio proxy
+            const tCtx = tempC.getContext('2d');
+            
+            // Draw clean certificate background layout
+            tCtx.fillStyle = "#ffffff";
+            tCtx.fillRect(0, 0, tempC.width, tempC.height);
+            
+            tCtx.strokeStyle = "#4f46e5";
+            tCtx.lineWidth = 12;
+            tCtx.strokeRect(30, 30, tempC.width - 60, tempC.height - 60);
+            
+            tCtx.strokeStyle = "#c7d2fe";
+            tCtx.lineWidth = 2;
+            tCtx.strokeRect(45, 45, tempC.width - 90, tempC.height - 90);
 
-- 底图必须是干净的，不能留着姓名等占位文字。系统不会读取图片里的文字，也无法擦除，文字位置完全由你拖动决定。
-- 横向、直向都可以。模板卡片会显示底图尺寸和方向。
-- 换模板后，文字会沿用原来的相对位置，通常要重新拖动并调整字号，横向模板尤其需要。
-- 底图分辨率决定最终画质，太小的图放大后背景会偏糊。
-- 上传的底图不会被记住，重新整理网页后会回到预设模板。「恢复默认模板」可随时切回预设。
+            tCtx.fillStyle = "#1f2937";
+            tCtx.font = "bold 40px sans-serif";
+            tCtx.textAlign = "center";
+            tCtx.fillText("CERTIFICATE OF COMPLETION", tempC.width / 2, 180);
 
-### 3.2 准备名单
+            tCtx.font = "18px sans-serif";
+            tCtx.fillStyle = "#6b7280";
+            tCtx.fillText("This is proudly presented to", tempC.width / 2, 260);
 
-- 格式：.xlsx、.xls、.csv。只读取第一个工作表。
-- 标题列：系统自动找到最上面一行至少有两格内容的列当标题列，它上面的大标题或空行会被忽略。
-- 标题空白但有资料的栏位，显示为「栏位 C」之类；整列空白的会被隐藏；重复的标题会自动加编号，例如「姓名 (2)」。
-- 一定要有姓名栏位。没有姓名的行会被跳过，PDF 文件名也取自姓名。
-- 日期：Excel 的日期格式会自动转成马来文，例如 28 Oktober 2026；文字格式的日期原样显示；CSV 里的 2026-10-28 也会被转换。
-- CSV 编码：自动识别 UTF-8 和 GBK。Big5 可能出现乱码，请在 Excel 另存为「CSV UTF-8」或直接用 .xlsx。
-- 标题支持中文，也支持马来文和英文。自动对应的关键词见附录。
+            const img = new Image();
+            img.onload = () => {
+                state.bgImage = img;
+                canvas.width = img.width;
+                canvas.height = img.height;
+                renderCanvas();
+            };
+            img.src = tempC.toDataURL();
+        }
 
-### 3.3 文字栏位设置
+        function renderCanvas() {
+            if (!state.bgImage) return;
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            ctx.drawImage(state.bgImage, 0, 0);
 
-点上方的小标签（NAMA、NAMA SEKOLAH 等）选择要编辑的文字。
+            // Render each active text field onto canvas based on percentage or pixel mapping
+            const currentRecord = state.listData[state.currentRecordIndex] || state.listData[0];
 
-| 设置 | 作用 |
-| --- | --- |
-| 名称 | 仅供辨认，不会印在证书上 |
-| 数据来源栏位 | 选名单的标题，下拉选单会显示第一笔资料当范例；选「不使用 / 固定文字」则印下面的固定文字 |
-| 固定文字 | 固定要印的文字，或栏位没有资料时的备用文字 |
-| 字号 | 5 到 60，相对单位，预览所见即所得 |
-| 最大宽度 | 40 到 400，文字超过会自动缩小或换行 |
-| 颜色、对齐、字体 | 颜色、居中或靠左靠右、6 种字体 |
-| 粗体、转大写、显示 | 取消「显示」可暂时不印这个文字，设置仍保留 |
-| 删除此栏位 | 永久删除该文字（至少保留一个） |
-| + 新增文字 | 新增任意文字，可对应名单任一栏位，例如班级、证书编号 |
+            for (let key in state.fields) {
+                let f = state.fields[key];
+                let displayText = f.text;
+                
+                if (f.mapping && currentRecord[f.mapping] !== undefined) {
+                    displayText = currentRecord[f.mapping];
+                }
 
-自动适配：文字太长时先缩小（最小约原来的 65%）；还放不下且含空格，就平均分成两行。中文姓名没有空格，不会换行，只会继续缩小。
+                ctx.save();
+                ctx.font = `bold ${f.size * (canvas.width / 800)}px sans-serif`;
+                ctx.fillStyle = f.color;
+                ctx.textAlign = "center";
+                
+                let posX = (f.x / 100) * canvas.width;
+                let posY = (f.y / 100) * canvas.height;
+                
+                ctx.fillText(displayText, posX, posY);
+                ctx.restore();
+            }
+        }
 
-### 3.4 预览操作
+        // Event Handlers for UI Controls
+        document.getElementById('bgUpload').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const img = new Image();
+                img.onload = () => {
+                    state.bgImage = img;
+                    canvas.width = img.width;
+                    canvas.height = img.height;
+                    renderCanvas();
+                };
+                img.src = event.target.result;
+            };
+            reader.readAsDataURL(file);
+        });
 
-- 用滑鼠或手指拖动文字改位置，点选文字可在左侧调整它的设置。
-- 点选后，预览图会出现绿色外框，此时可用方向键微调位置，每次 1 像素，按住 Shift 每次 10 像素。
-- 按 Delete 或 Backspace 会跳出确认，确定后删除选中的文字。
-- 在左侧输入框里按 Backspace 或 Delete，只会删除框内的字，不会删除整个文字栏位。
-- 预览图比实际输出小，实际输出的分辨率更高。
+        document.getElementById('listUpload').addEventListener('change', (e) => {
+            const file = e.target.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = (event) => {
+                const data = new Uint8Array(event.target.result);
+                const workbook = XLSX.read(data, { type: 'array' });
+                const firstSheetName = workbook.SheetNames[0];
+                const worksheet = workbook.Sheets[firstSheetName];
+                const json = XLSX.utils.sheet_to_json(worksheet);
+                
+                if (json.length > 0) {
+                    state.listData = json;
+                    state.headers = Object.keys(json[0]);
+                    state.currentRecordIndex = 0;
+                    updateMappingDropdowns();
+                    document.getElementById('listStatus').innerText = `Loaded ${json.length} records successfully.`;
+                    document.getElementById('previewRecordInfo').innerText = `Showing record: 1 / ${json.length}`;
+                    renderCanvas();
+                }
+            };
+            reader.readAsArrayBuffer(file);
+        });
 
-### 3.5 生成与输出
+        function updateMappingDropdowns() {
+            const select = document.getElementById('dataMapping');
+            select.innerHTML = '<option value="">-- Fixed Text / None --</option>';
+            state.headers.forEach(h => {
+                let opt = document.createElement('option');
+                opt.value = h;
+                opt.textContent = h;
+                select.appendChild(opt);
+            });
+            syncSidebarToSelectedField();
+        }
 
-- 按「生成并下载 ZIP」，页面会显示进度，完成后自动下载 certificates.zip。
-- ZIP 里有 pdf 文件夹，每人一份 PDF。勾选「另外附上合并 PDF」会多一个 all_certificates.pdf，方便一次打印。
-- 文件名取自姓名，不合法的字符会被移除，重名自动加 _2、_3。
-- PDF 页面宽度为 A4（直向 595 pt，横向 842 pt），高度按底图比例。预设模板比 A4 略长，打印时请选「缩放至页面大小」。
-- 输出图片宽度约 1600 到 2400 像素，JPEG 品质 92%。
-- 输出的 PDF 里，文字是图片的一部分，无法选取或复制。
+        const fieldSelect = document.getElementById('fieldSelect');
+        const dataMapping = document.getElementById('dataMapping');
+        const fontSizeRange = document.getElementById('fontSizeRange');
+        const fontSizeVal = document.getElementById('fontSizeVal');
+        const fontColor = document.getElementById('fontColor');
 
-## 4. 注意事项
+        fieldSelect.addEventListener('change', (e) => {
+            state.selectedField = e.target.value;
+            syncSidebarToSelectedField();
+        });
 
-1. 名单请自己备份，网页不会保存名单。
-2. 正式生成前，先用几笔资料检查版面，尤其是最长的姓名和校名。
-3. 字体取决于使用者的电脑。预设襯线字体依序找 Liberation Serif、Times New Roman、Times；不同电脑看起来会略有不同。中文姓名请选「中文 黑体」。
-4. 版面设置自动记在浏览器里。换浏览器、换电脑、清除浏览器资料后会消失。目前没有「重置版面」按钮，也没有导出版面的功能。
-5. 名单含学生个资，请确认已获同意，并只用于寄送证书。
-6. 内嵌的 Excel 读取库（SheetJS 0.18.5）是旧版，已知有安全漏洞，主要风险是打开来路不明的文件。只处理自己信任的名单。
-7. 预设模板含 Tzu Chi 和 PaGamO 的标志与设计，对外分享前请确认授权。
-8. 想打印的话，原始底图分辨率要足够。预设模板只有 391×564 像素，只适合屏幕和一般打印。
+        function syncSidebarToSelectedField() {
+            let f = state.fields[state.selectedField];
+            dataMapping.value = f.mapping || "";
+            fontSizeRange.value = f.size;
+            fontSizeVal.textContent = f.size;
+            fontColor.value = f.color;
+        }
 
-## 5. 常见问题排查
+        dataMapping.addEventListener('change', (e) => {
+            state.fields[state.selectedField].mapping = e.target.value;
+            renderCanvas();
+        });
 
-| 现象 | 处理 |
-| --- | --- |
-| 打开后看到一堆程式码 | 用 Chrome 或 Edge 打开，不要用文字编辑器；手机收到的先下载到电脑 |
-| 上传名单显示读取失败 | 文件可能损坏或有密码；另存为 .xlsx 再试 |
-| 下拉选单没有想要的栏位 | 检查标题是否在最上面至少有两格内容的那一列 |
-| 提示要对应姓名栏位 | 让「NAMA」文字的数据来源选到名单的姓名栏位 |
-| 点生成没有反应 | 先上传名单 |
-| 文字太小或位置不对 | 横向模板需要手动调整位置和字号 |
-| 中文显示成方块 | 字体选「中文 黑体」 |
-| 证书上有重叠的文字 | 底图上原本还有文字，请在原始设计里去掉 |
-| PDF 模板读取失败 | 可能是加密或损坏的 PDF；改导出成 PNG |
-| CSV 内容乱码 | 另存为「CSV UTF-8」或用 .xlsx |
+        fontSizeRange.addEventListener('input', (e) => {
+            state.fields[state.selectedField].size = parseInt(e.target.value);
+            fontSizeVal.textContent = e.target.value;
+            renderCanvas();
+        });
 
-## 6. 它是怎么搭建的
+        fontColor.addEventListener('input', (e) => {
+            state.fields[state.selectedField].color = e.target.value;
+            renderCanvas();
+        });
 
-整个工具是一个纯前端网页，没有后端、没有数据库、没有构建工具，全部写在一个 HTML 文件里。
+        document.getElementById('resetDefaultTpl').addEventListener('click', createDefaultTemplate);
 
-```text
-浏览器（本机打开 HTML）
- ├─ 界面与逻辑：原生 HTML / CSS / JavaScript
- ├─ SheetJS 0.18.5：读取 Excel、CSV
- ├─ pdf.js 3.11.174：读取 PDF 模板
- ├─ Canvas：画底图和文字，输出成 JPEG
- ├─ jsPDF 2.5.1：每人生成一页 PDF
- └─ JSZip 3.10.1：打包成 ZIP 下载
-```
+        // Bulk Generation & ZIP Export logic using jsPDF and JSZip
+        document.getElementById('generateBtn').addEventListener('click', async () => {
+            const { jsPDF } = window.jspdf;
+            const zip = new JSZip();
+            const pdfFolder = zip.folder("pdf_certificates");
 
-数据流：上传名单，解析出标题和资料；对每一行，在 Canvas 上画底图，再按各文字栏位的设置画上文字，转成 JPEG，放进 PDF，最后全部放进 ZIP。
+            document.getElementById('generateBtn').innerText = "Generating ZIP...";
 
-关键设计：
+            for (let i = 0; i < state.listData.length; i++) {
+                state.currentRecordIndex = i;
+                renderCanvas();
 
-- 位置以比例保存（占底图宽高的百分比），字号和最大宽度以「400 像素宽的底图」为单位，所以换不同尺寸的底图也能大致对齐。
-- 离线：四个函式库都直接嵌在文件里。pdf.js 的 worker 以编码后的文字内嵌，使用时转成 Blob 载入，因此不需要任何外部来源。
-- 记忆：浏览器的 localStorage 只保存文字栏位的版面设置，不保存底图和名单。
-- 逐笔生成时会让出时间给页面，所以进度条会随着更新，不会卡住。
-- 文件大小约 3.2 MB，其中函式库占大部分。
+                // Convert Canvas to High-Quality JPEG Image URI
+                const imgData = canvas.toDataURL('image/jpeg', 0.92);
+                
+                // Create PDF matching canvas layout orientation
+                const pdfOrientation = canvas.width > canvas.height ? 'landscape' : 'portrait';
+                const pdf = new jsPDF({
+                    orientation: pdfOrientation,
+                    unit: 'pt',
+                    format: [canvas.width, canvas.height]
+                });
 
-## 7. 维护与修改
+                pdf.addImage(imgData, 'JPEG', 0, 0, canvas.width, canvas.height);
+                const pdfBlobOutput = pdf.output('blob');
 
-日常使用不需要维护：没有账号、没有服务、没有会过期的授权。建议保存一份文件副本，换电脑时直接复制过去。
+                // Derive safe file name from record data
+                let record = state.listData[i];
+                let nameKey = state.headers.find(h => /name|nama/i.test(h)) || state.headers[0];
+                let safeName = (record[nameKey] || `certificate_${i+1}`).toString().replace(/[/\\?%*:|"<>]/g, '_');
+                
+                pdfFolder.file(`${safeName}.pdf`, pdfBlobOutput);
+            }
 
-需要修改时，用文字编辑器打开 HTML，搜寻以下关键字：
+            // Generate ZIP Archive and trigger client-side download
+            const content = await zip.generateAsync({ type: "blob" });
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(content);
+            link.download = "certificates.zip";
+            link.click();
 
-| 想修改 | 搜寻 |
-| --- | --- |
-| 预设文字的位置、大小 | defaults 和 mk( |
-| 可选字体 | FONTS |
-| 自动对应的标题关键词 | CANDS |
-| 日期的月份名称和格式 | MONTHS、fmtDate |
-| 预设文字颜色 | const C = |
-| 预设模板图片 | DEFAULT_TPL（整串编码的 PNG，替换即可） |
-| 输出画质 | outW 和 image/jpeg |
+            document.getElementById('generateBtn').innerText = "Generate & Download ZIP";
+            state.currentRecordIndex = 0;
+            renderCanvas();
+        });
 
-修改前请保留原文件副本，改完用测试名单检查预览和生成结果。升级内嵌的函式库需要重新下载并替换对应的程式码区块，建议由懂网页开发的人处理。
-
-## 8. 分发给他人
-
-- 把这一个 HTML 文件传给对方即可，预设模板已内嵌，对方不需要网络。
-- Gmail 或 Outlook 有时会拦截 .html 附件，建议压缩成 ZIP 或用云端硬盘分享。
-- 请对方在电脑上使用，手机浏览器通常无法正常打开本机 HTML。
-- 你调好的版面不会跟着文件走，对方需自己调整。
-- 如果不想让别人拿到预设模板，需要另做一份不内嵌模板的空白版，因为内嵌的图片可从原始码抽出。
-
-## 9. 测试记录与已知限制
-
-### 已测试（Chromium 141，完全断网）
-
-- 四个函式库全部载入，过程中没有任何网络请求
-- 含顶部横幅和中文标题的 Excel；GBK 与 UTF-8 的 CSV
-- 中文姓名的证书与文件名；生成 ZIP
-- 横向 PDF 模板，生成的 PDF 为 A4 横向；上传 .pptx 会跳出导出提示
-- 方向键微调、Delete 删除确认、输入框内 Backspace 不会删除栏位
-- 页面全程没有浏览器错误
-
-### 尚未测试
-
-- Safari、Firefox、Windows 与 Mac 实机、手机、数百人以上的大名单、真实打印效果
-
-### 已知限制
-
-- 无法直接读取 PowerPoint 文件
-- 输出 PDF 里的文字是图片，不可选取
-- 底图文字无法自动擦除
-- 只读取名单的第一个工作表、PDF 模板的第 1 页
-- 没有版面导出、导入和重置功能
-
-## 10. 附录
-
-### 预设的文字栏位
-
-| 名称 | 预设样式 |
-| --- | --- |
-| NAMA | 粗体、大写、居中 |
-| NAMA SEKOLAH | 大写、居中 |
-| TARIKH | 居中，日期自动转马来文 |
-| EMAIL | 小字，位于签名右侧；不需要时取消「显示」 |
-
-### 可选字体
-
-襯线 Times、无衬线 Arial、Georgia、等宽 Courier、手写 Script、中文 黑体。
-
-### 自动对应的标题关键词
-
-- 姓名：nama、name、nama penuh、姓名、名字、学生姓名、參加者 等
-- 学校：nama sekolah、sekolah、school、学校、學校
-- 日期：tarikh、date、日期
-- 邮箱：email、e-mail、邮箱、邮件、电邮、电子邮件、信箱 等（简体与繁体）
-
-标题只要包含这些字样就会被自动对应，对应不到的在下拉选单手动选择即可。
-
----
-
-如果你需要，我也可以继续把这份说明整理成更适合 GitHub 展示的 README 版本（例如加入项目简介、安装说明、截图、使用流程和许可证说明），并直接提交到仓库。
+        // Initial setup execution
+        createDefaultTemplate();
+        updateMappingDropdowns();
+    </script>
+</body>
+</html>
